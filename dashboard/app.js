@@ -159,6 +159,85 @@
     return section;
   }
 
+  function makeAnalytics() {
+    const section = element('section', 'analytics');
+    const totals = new Map();
+    const chains = new Map();
+    DATA.rows.forEach(function (row) {
+      const category = row.category || 'Other';
+      totals.set(category, (totals.get(category) || 0) + 1);
+      (row.chains || []).forEach(function (chain) {
+        chains.set(chain, (chains.get(chain) || 0) + 1);
+      });
+    });
+    const values = DATA.rows.map(function (row) { return row.implied_value_usd; })
+      .sort(function (a, b) { return a - b; });
+    const middle = Math.floor(values.length / 2);
+    const median = values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
+    const stats = element('div', 'stats card');
+    append(stats, element('div', 'eyebrow', 'BOARD SNAPSHOT'), element('h2', '', 'Coverage at a glance'));
+    const categoryLine = Array.from(totals.entries()).sort(function (a, b) {
+      return b[1] - a[1] || a[0].localeCompare(b[0]);
+    }).map(function (item) { return item[0] + ' ' + item[1]; }).join(' · ');
+    const chainLine = Array.from(chains.entries()).sort(function (a, b) {
+      return b[1] - a[1] || a[0].localeCompare(b[0]);
+    }).map(function (item) { return item[0] + ' ' + item[1]; }).join(' · ');
+    append(stats,
+      element('p', 'sub', DATA.rows.length + ' ranked protocols across ' + totals.size + ' categories'),
+      element('p', 'sub', 'Median implied value · ' + usd(median)),
+      element('p', 'sub', 'Combined TVL · ' + usd(DATA.rows.reduce(function (sum, row) { return sum + row.tvl_usd; }, 0))),
+      element('p', 'sub', 'Categories · ' + categoryLine),
+      element('p', 'sub', 'Protocols per chain · ' + chainLine));
+
+    const chart = element('section', 'chart card');
+    append(chart, element('div', 'eyebrow', 'MODEL LEADERS'), element('h2', '', 'Top 10 by implied value'));
+    const leaders = DATA.rows.slice().sort(function (a, b) {
+      return b.implied_value_usd - a.implied_value_usd || a.rank - b.rank;
+    }).slice(0, 10);
+    const max = leaders.length ? leaders[0].implied_value_usd : 1;
+    const svgNamespace = 'http:' + String.fromCharCode(47, 47) + 'www.w3.org/2000/svg';
+    const graphic = document.createElementNS(svgNamespace, 'svg');
+    graphic.setAttribute('viewBox', '0 0 720 250');
+    graphic.setAttribute('role', 'img');
+    graphic.setAttribute('aria-label', 'Top ten protocols by implied value');
+    leaders.forEach(function (row, index) {
+      const y = index * 24 + 4;
+      const label = document.createElementNS(svgNamespace, 'text');
+      label.setAttribute('x', '0'); label.setAttribute('y', String(y + 13));
+      label.setAttribute('class', 'chart-label'); label.setAttribute('fill', '#91a6a8');
+      label.setAttribute('font-size', '11'); label.textContent = row.name.slice(0, 25);
+      const bar = document.createElementNS(svgNamespace, 'rect');
+      bar.setAttribute('x', '205'); bar.setAttribute('y', String(y)); bar.setAttribute('height', '16');
+      bar.setAttribute('width', String(Math.max(2, 370 * row.implied_value_usd / max)));
+      bar.setAttribute('rx', '4'); bar.setAttribute('class', 'chart-bar'); bar.setAttribute('fill', '#52e0bd');
+      const amount = document.createElementNS(svgNamespace, 'text');
+      amount.setAttribute('x', '590'); amount.setAttribute('y', String(y + 13));
+      amount.setAttribute('class', 'chart-amount'); amount.setAttribute('fill', '#edf5f3');
+      amount.setAttribute('font-size', '10'); amount.textContent = usd(row.implied_value_usd);
+      append(graphic, label, bar, amount);
+    });
+    chart.appendChild(graphic);
+    append(section, stats, chart);
+    return section;
+  }
+
+  function exportRows() {
+    const columns = ['rank', 'name', 'slug', 'category', 'chains', 'tvl_usd', 'change_7d', 'age_days', 'implied_value_usd'];
+    function quote(value) {
+      const text = Array.isArray(value) ? value.join('; ') : value === null || value === undefined ? '' : String(value);
+      return '"' + text.replace(/"/g, '""') + '"';
+    }
+    const lines = [columns.join(',')].concat(sortRows(filteredRows()).map(function (row) {
+      return columns.map(function (key) { return quote(row[key]); }).join(',');
+    }));
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const link = element('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'token-radar-filtered.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
   function makeToolbar() {
     const toolbar = element('section', 'toolbar');
     const search = element('input');
@@ -221,6 +300,10 @@
       drawTable();
     });
     toolbar.appendChild(minimum);
+    const exportButton = element('button', 'export', 'Export filtered CSV');
+    exportButton.type = 'button';
+    exportButton.addEventListener('click', exportRows);
+    toolbar.appendChild(exportButton);
     return toolbar;
   }
 
@@ -493,6 +576,33 @@
     );
     panel.appendChild(breakdown);
 
+    const factors = [
+      ['Comp', model.comp_multiple],
+      ['Growth', model.growth_multiplier],
+      ['Maturity', model.maturity_multiplier],
+      ['Chains', model.chains_multiplier]
+    ];
+    const factorPanel = element('section', 'section');
+    append(factorPanel, element('h3', '', 'Multiplier profile'), element('p', 'sub', 'Each bar is scaled against the largest multiplier in this protocol’s model.'));
+    const largest = Math.max.apply(null, factors.map(function (factor) { return factor[1]; }));
+    factors.forEach(function (factor) {
+      const line = element('div', 'factor-row');
+      const label = element('span', 'factor-label', factor[0]);
+      const track = element('div', 'factor-track');
+      track.style.cssText = 'height:8px;background:#1d2b30;border-radius:5px;overflow:hidden;flex:1';
+      const fill = element('div', 'factor-fill');
+      fill.style.cssText = 'height:100%;background:#52e0bd;border-radius:5px';
+      fill.style.width = Math.max(2, factor[1] / largest * 100) + '%';
+      track.appendChild(fill);
+      line.style.cssText = 'display:flex;align-items:center;gap:10px;margin:8px 0';
+      label.style.cssText = 'width:76px;color:#91a6a8;font-size:12px';
+      const value = element('b', 'factor-value', factor[1].toFixed(3) + '×');
+      value.style.cssText = 'width:58px;text-align:right;font:11px var(--mono);color:#edf5f3';
+      append(line, label, track, value);
+      factorPanel.appendChild(line);
+    });
+    panel.appendChild(factorPanel);
+
     const nearest = DATA.comps.slice().sort(function (left, right) {
       return Math.abs(left.tvl_usd - protocol.tvl_usd) -
         Math.abs(right.tvl_usd - protocol.tvl_usd) ||
@@ -546,7 +656,8 @@
     append(
       shell,
       makeHeader(),
-      makeSummary()
+      makeSummary(),
+      makeAnalytics()
     );
 
     const sectionHead = element('div', 'section-head');
