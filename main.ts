@@ -13,7 +13,7 @@ const issue=rows.length<100||rows.length>4000?'row count':snap.watchlist.some((s
 if(issue){console.error(`Board self-check failed: ${issue}`);process.exit(1)}
 mkdirSync(out,{recursive:true});
 writeFileSync(join(out,'board.json'),JSON.stringify({rows})+'\n');
-const data={as_of:snap.as_of,source:snap.source,floor_usd:snap.floor_usd,protocol_count:snap.protocols.length,watchlist_size:snap.watchlist.length,board_size:rows.length,model_version:'radar-2',formula:'TVL × category comp × growth × maturity × chain breadth',multiples,rows,live,comps};
+const data={as_of:snap.as_of,source:snap.source,floor_usd:snap.floor_usd,protocol_count:snap.protocols.length,watchlist_size:snap.watchlist.length,watchlist_slugs:snap.watchlist,board_size:rows.length,model_version:'radar-2',formula:'TVL × category comp × growth × maturity × chain breadth',multiples,rows,live,comps};
 writeFileSync(join(out,'data.js'),'window.RADAR='+JSON.stringify(data)+';\n');
 function copyDir(from:string,to:string){mkdirSync(to,{recursive:true});for(const n of readdirSync(from)){if(n.startsWith('.'))continue;const a=join(from,n),b=join(to,n);if(statSync(a).isFile())copyFileSync(a,b)}}
 copyDir(join(root,'dashboard'),join(out,'dashboard'));copyDir(join(root,'screenshots'),join(out,'screenshots'));
