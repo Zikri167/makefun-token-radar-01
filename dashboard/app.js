@@ -10,8 +10,12 @@
     chain: 'all',
     sort: 'rank',
     minimum: 0,
-    protocol: null
+    protocol: null,
+    watchlistOnly: false,
+    compare: [],
+    compareMessage: ''
   };
+  const WATCHLIST = new Set(DATA.watchlist_slugs || []);
 
   const money = new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -68,6 +72,7 @@
     state.query = params.get('q') || '';
     state.sort = params.get('sort') || 'rank';
     state.minimum = Number(params.get('min') || 0);
+    state.watchlistOnly = params.get('watchlist') === '1';
   }
 
   function writeHash() {
@@ -78,6 +83,7 @@
     if (state.query) params.set('q', state.query);
     if (state.sort !== 'rank') params.set('sort', state.sort);
     if (state.minimum > 0) params.set('min', String(state.minimum));
+    if (state.watchlistOnly) params.set('watchlist', '1');
 
     const next = params.toString();
     const hash = next ? '#' + next : window.location.pathname;
@@ -195,29 +201,62 @@
       return b.implied_value_usd - a.implied_value_usd || a.rank - b.rank;
     }).slice(0, 10);
     const max = leaders.length ? leaders[0].implied_value_usd : 1;
-    const svgNamespace = 'http:' + String.fromCharCode(47, 47) + 'www.w3.org/2000/svg';
-    const graphic = document.createElementNS(svgNamespace, 'svg');
-    graphic.setAttribute('viewBox', '0 0 720 250');
+    const graphic = element('div', 'leader-bars');
     graphic.setAttribute('role', 'img');
     graphic.setAttribute('aria-label', 'Top ten protocols by implied value');
-    leaders.forEach(function (row, index) {
-      const y = index * 24 + 4;
-      const label = document.createElementNS(svgNamespace, 'text');
-      label.setAttribute('x', '0'); label.setAttribute('y', String(y + 13));
-      label.setAttribute('class', 'chart-label'); label.setAttribute('fill', '#91a6a8');
-      label.setAttribute('font-size', '11'); label.textContent = row.name.slice(0, 25);
-      const bar = document.createElementNS(svgNamespace, 'rect');
-      bar.setAttribute('x', '205'); bar.setAttribute('y', String(y)); bar.setAttribute('height', '16');
-      bar.setAttribute('width', String(Math.max(2, 370 * row.implied_value_usd / max)));
-      bar.setAttribute('rx', '4'); bar.setAttribute('class', 'chart-bar'); bar.setAttribute('fill', '#52e0bd');
-      const amount = document.createElementNS(svgNamespace, 'text');
-      amount.setAttribute('x', '590'); amount.setAttribute('y', String(y + 13));
-      amount.setAttribute('class', 'chart-amount'); amount.setAttribute('fill', '#edf5f3');
-      amount.setAttribute('font-size', '10'); amount.textContent = usd(row.implied_value_usd);
-      append(graphic, label, bar, amount);
+    leaders.forEach(function (row) {
+      const line = element('div', 'leader-row');
+      const label = element('span', 'chart-label', row.name.slice(0, 25));
+      const track = element('div', 'leader-track');
+      const bar = element('div', 'chart-bar');
+      bar.style.width = Math.max(0.5, 100 * row.implied_value_usd / max) + '%';
+      bar.setAttribute('aria-hidden', 'true');
+      track.appendChild(bar);
+      const amount = element('span', 'chart-amount', usd(row.implied_value_usd));
+      append(line, label, track, amount);
+      graphic.appendChild(line);
     });
     chart.appendChild(graphic);
-    append(section, stats, chart);
+    const distribution = element('section', 'category-chart card');
+    append(distribution, element('div', 'eyebrow', 'CATEGORY MIX'), element('h2', '', 'Ranked protocols by category'));
+    distribution.appendChild(element('p', 'sub', 'Counts cover all ranked rows; choose a category bar to apply or clear the board filter.'));
+    const categoryCounts = Array.from(totals.entries()).sort(function (a, b) {
+      return b[1] - a[1] || a[0].localeCompare(b[0]);
+    });
+    const largestCategory = categoryCounts.length ? categoryCounts[0][1] : 1;
+    const bars = element('div', 'category-bars');
+    categoryCounts.forEach(function (entry) {
+      const line = element('div', 'category-row');
+      line.tabIndex = 0;
+      line.setAttribute('role', 'button');
+      line.setAttribute('aria-label', 'Filter board to ' + entry[0] + ', ' + entry[1] + ' protocols');
+      if (state.category === entry[0]) line.classList.add('selected-category');
+      const label = element('span', 'category-label', entry[0]);
+      const track = element('div', 'leader-track');
+      const fill = element('div', 'category-fill');
+      fill.style.width = (100 * entry[1] / largestCategory) + '%';
+      track.appendChild(fill);
+      const share = (100 * entry[1] / DATA.rows.length).toFixed(1) + '%';
+      line.title = entry[1] + ' protocols, ' + share + ' of the ranked board';
+      const amount = element('b', 'category-count', entry[1]);
+      amount.setAttribute('aria-label', entry[1] + ' protocols, ' + share + ' of board');
+      append(line, label, track, amount);
+      function selectCategory() {
+        state.category = state.category === entry[0] ? 'all' : entry[0];
+        writeHash();
+        render();
+      }
+      line.addEventListener('click', selectCategory);
+      line.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          selectCategory();
+        }
+      });
+      bars.appendChild(line);
+    });
+    distribution.appendChild(bars);
+    append(section, stats, chart, distribution);
     return section;
   }
 
@@ -234,6 +273,16 @@
     const link = element('a');
     link.href = URL.createObjectURL(blob);
     link.download = 'token-radar-filtered.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  function exportJson() {
+    const rows = sortRows(filteredRows());
+    const blob = new Blob([JSON.stringify({ exported_at: DATA.as_of, count: rows.length, rows: rows }, null, 2)], { type: 'application/json;charset=utf-8' });
+    const link = element('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'token-radar-filtered.json';
     link.click();
     URL.revokeObjectURL(link.href);
   }
@@ -304,12 +353,28 @@
     exportButton.type = 'button';
     exportButton.addEventListener('click', exportRows);
     toolbar.appendChild(exportButton);
+    const jsonButton = element('button', 'export', 'Export filtered JSON');
+    jsonButton.type = 'button';
+    jsonButton.addEventListener('click', exportJson);
+    toolbar.appendChild(jsonButton);
+    const watchLabel = element('label', 'watch-toggle');
+    const watchInput = element('input');
+    watchInput.type = 'checkbox';
+    watchInput.checked = state.watchlistOnly;
+    watchInput.addEventListener('change', function () {
+      state.watchlistOnly = watchInput.checked;
+      writeHash();
+      drawTable();
+    });
+    append(watchLabel, watchInput, document.createTextNode(' Watchlist only (' + WATCHLIST.size + ')'));
+    toolbar.appendChild(watchLabel);
     return toolbar;
   }
 
   function filteredRows() {
     const query = state.query.trim().toLowerCase();
     return DATA.rows.filter(function (row) {
+      if (state.watchlistOnly && !WATCHLIST.has(row.slug)) return false;
       if (state.category !== 'all' && (row.category || 'Other') !== state.category) return false;
       if (state.chain !== 'all' && !(row.chains || []).includes(state.chain)) return false;
       if (row.implied_value_usd < state.minimum) return false;
@@ -346,7 +411,7 @@
   function makeTableHeader() {
     const head = element('thead');
     const row = element('tr');
-    ['#', 'Protocol', 'Category', 'Chains', 'TVL', '7d Δ', 'Age', 'Implied value']
+    ['Compare', '#', 'Protocol', 'Category', 'Chains', 'TVL', '7d Δ', 'Age', 'Implied value']
       .forEach(function (label) {
         row.appendChild(element('th', '', label));
       });
@@ -368,6 +433,7 @@
       openProtocol(protocol.slug);
     });
     row.addEventListener('keydown', function (event) {
+      if (event.target.closest('input, button, a, select')) return;
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
         openProtocol(protocol.slug);
@@ -385,8 +451,20 @@
       ? 'num'
       : 'num ' + (protocol.change_7d >= 0 ? 'pos' : 'neg');
 
+    const compareCell = element('td', 'compare-cell');
+    const compareInput = element('input');
+    compareInput.type = 'checkbox';
+    compareInput.checked = state.compare.includes(protocol.slug);
+    compareInput.setAttribute('aria-label', 'Compare ' + protocol.name);
+    compareInput.addEventListener('click', function (event) { event.stopPropagation(); });
+    compareInput.addEventListener('change', function (event) {
+      event.stopPropagation();
+      toggleCompare(protocol.slug);
+    });
+    compareCell.appendChild(compareInput);
     append(
       row,
+      compareCell,
       element('td', 'num rank', protocol.rank),
       name,
       element('td', '', protocol.category || 'Other'),
@@ -405,8 +483,11 @@
 
     box.replaceChildren();
     const rows = sortRows(filteredRows());
+    const count = document.getElementById('result-count');
+    if (count) count.textContent = rows.length + ' of ' + DATA.rows.length + ' rows shown';
     if (rows.length === 0) {
       box.appendChild(element('div', 'empty', 'No protocols match these filters.'));
+      drawCompareTray();
       return;
     }
 
@@ -418,8 +499,90 @@
     append(table, makeTableHeader(), body);
     box.appendChild(table);
 
-    const count = document.getElementById('result-count');
-    if (count) count.textContent = rows.length + ' rows shown';
+    drawCompareTray();
+  }
+
+  function toggleCompare(slug) {
+    const index = state.compare.indexOf(slug);
+    state.compareMessage = '';
+    if (index >= 0) state.compare.splice(index, 1);
+    else if (state.compare.length >= 3) state.compareMessage = 'Choose up to three protocols. Remove one before adding another.';
+    else state.compare.push(slug);
+    drawTable();
+  }
+
+  function drawCompareTray() {
+    const tray = document.getElementById('compare-tray');
+    if (!tray) return;
+    tray.replaceChildren();
+    const picked = state.compare.map(function (slug) {
+      return DATA.rows.find(function (row) { return row.slug === slug; });
+    }).filter(Boolean);
+    const top = element('div', 'compare-top');
+    append(top, element('div', 'eyebrow', 'PROTOCOL COMPARISON'), element('span', 'sub', picked.length + ' / 3 selected'));
+    const clear = element('button', 'clear-compare', 'Clear picks');
+    clear.type = 'button';
+    clear.disabled = picked.length === 0;
+    clear.addEventListener('click', function () { state.compare = []; state.compareMessage = ''; drawTable(); });
+    top.appendChild(clear);
+    tray.appendChild(top);
+    if (state.compareMessage) {
+      const notice = element('p', 'compare-message', state.compareMessage);
+      notice.setAttribute('role', 'status');
+      notice.setAttribute('aria-live', 'polite');
+      tray.appendChild(notice);
+    }
+    if (picked.length) {
+      const picks = element('div', 'compare-picks');
+      picked.forEach(function (row) {
+        const chip = element('span', 'compare-pick');
+        const remove = element('button', 'remove-pick', '×');
+        remove.type = 'button';
+        remove.setAttribute('aria-label', 'Remove ' + row.name + ' from comparison');
+        remove.addEventListener('click', function () {
+          state.compare = state.compare.filter(function (slug) { return slug !== row.slug; });
+          state.compareMessage = '';
+          drawTable();
+        });
+        append(chip, element('b', '', '#' + row.rank), document.createTextNode(' ' + row.name), remove);
+        picks.appendChild(chip);
+      });
+      tray.appendChild(picks);
+    }
+    if (picked.length === 0) {
+      tray.appendChild(element('p', 'sub', 'Select up to three row checkboxes to compare model inputs side by side.'));
+      return;
+    }
+    const table = element('table', 'compare-table');
+    const head = element('thead');
+    const heading = element('tr');
+    heading.appendChild(element('th', '', 'Metric'));
+    picked.forEach(function (row) { heading.appendChild(element('th', '', row.name)); });
+    head.appendChild(heading);
+    const body = element('tbody');
+    const metrics = [
+      ['Rank', function (row) { return row.rank; }],
+      ['Category', function (row) { return row.category || 'Other'; }],
+      ['Chains', function (row) { return (row.chains || []).join(', ') || '—'; }],
+      ['TVL', function (row) { return usd(row.tvl_usd); }],
+      ['Implied value', function (row) { return usd(row.implied_value_usd); }],
+      ['Implied value / TVL', function (row) { return (row.implied_value_usd / row.tvl_usd).toFixed(3) + '×'; }],
+      ['Comp multiple', function (row) { return row.model.comp_multiple.toFixed(3) + '×'; }],
+      ['Growth input', function (row) { return percentage(row.model.growth_pct); }],
+      ['Growth multiple', function (row) { return row.model.growth_multiplier.toFixed(3) + '×'; }],
+      ['Maturity multiple', function (row) { return row.model.maturity_multiplier.toFixed(3) + '×'; }],
+      ['Chain count', function (row) { return (row.chains || []).length; }],
+      ['Chain multiple', function (row) { return row.model.chains_multiplier.toFixed(3) + '×'; }],
+      ['Farm-step count', function (row) { return row.farm_steps.length; }]
+    ];
+    metrics.forEach(function (metric) {
+      const tr = element('tr');
+      tr.appendChild(element('th', '', metric[0]));
+      picked.forEach(function (row) { tr.appendChild(element('td', '', metric[1](row))); });
+      body.appendChild(tr);
+    });
+    append(table, head, body);
+    tray.appendChild(table);
   }
 
   function makeMethodology() {
@@ -681,7 +844,9 @@
     resultCount.id = 'result-count';
 
     const board = element('section');
-    append(board, controls, sectionHead, resultCount, tableBox);
+    const compareTray = element('section', 'compare-tray card');
+    compareTray.id = 'compare-tray';
+    append(board, controls, sectionHead, resultCount, tableBox, compareTray);
 
     const methodology = element('div', 'method');
     methodology.appendChild(makeMethodology());
